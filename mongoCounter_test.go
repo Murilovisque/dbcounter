@@ -17,41 +17,103 @@ const (
 	collectionTest   = "counterstest"
 )
 
-func TestIncAndPersistAndVal(t *testing.T) {
+func TestIncAndPersistAndValShouldWorks(t *testing.T) {
 	dropDataBase(dbTest)
 	m := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
 	m.Inc("k1d", qtdeDurationTest)
 	m.Inc("k2d", qtdeDurationTest)
 	m.Inc("k1i", qtdeTest)
 	m.Inc("k2i", qtdeTest)
-	m.Persist()
+	err := m.Persist()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
 	passIfAreEqualsDurationWhenUseVal(t, qtdeDurationTest, &m, "k1d", "k2d")
 	passIfAreEqualsIntWhenUseVal(t, qtdeTest, &m, "k1i", "k2i")
 }
 
-func TestIncAndUpdateFromDBInOtherInstance(t *testing.T) {
+func TestIncAndPersistAndUpdateFromDBInOtherInstanceShouldKeepTheOldValues(t *testing.T) {
 	dropDataBase(dbTest)
 	m := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
 	m.Inc("k1d", qtdeDurationTest)
 	m.Inc("k1i", qtdeTest)
-	m.Persist()
-	m = dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
+	err := m.Persist()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+	m2 := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
+	err = m2.UpdateFromDB()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+	passIfAreEqualsDurationWhenUseVal(t, qtdeDurationTest, &m2, "k1d")
+	passIfAreEqualsIntWhenUseVal(t, qtdeTest, &m2, "k1i")
+}
+
+func TestUpdateWithoutDBShouldKeepMongoCounterClean(t *testing.T) {
+	dropDataBase(dbTest)
+	m := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
 	err := m.UpdateFromDB()
 	if err != nil {
 		log.Println(err)
 		t.FailNow()
 	}
-	passIfAreEqualsDurationWhenUseVal(t, qtdeDurationTest, &m, "k1d")
-	passIfAreEqualsIntWhenUseVal(t, qtdeTest, &m, "k1i")
+	m.Range(func(k, v interface{}) bool {
+		t.FailNow()
+		return false
+	})
 }
 
-func TestUpdateWithoutDB(t *testing.T) {
+func TestClearShouldRemoveKeyFromDB(t *testing.T) {
 	dropDataBase(dbTest)
 	m := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
-	err := m.UpdateFromDB()
+	m.Inc("k1i", 5)
+	err := m.Persist()
 	if err != nil {
 		log.Println(err)
 		t.FailNow()
+	}
+	err = m.Clear("k1i")
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+	passIfAreZero(t, &m, "k1i")
+	err = m.UpdateFromDB()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+	passIfAreZero(t, &m, "k1i")
+}
+
+func TestStartBackgroundPersistanceShouldWorks(t *testing.T) {
+	dropDataBase(dbTest)
+	m := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest, PersistenceInterval: 1 * time.Second}
+	m.StartBackgroundPersistance()
+	m.Inc("k1i", 5)
+	m.Inc("k1d", time.Duration(5))
+	time.Sleep(2 * time.Second)
+	m.Stop()
+	m = dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
+	m.UpdateFromDB()
+	passIfAreEqualsDurationWhenUseVal(t, time.Duration(5), &m, "k1d")
+	passIfAreEqualsIntWhenUseVal(t, 5, &m, "k1i")
+}
+
+func passIfAreZero(t *testing.T, c *dbcounter.MongoCounter, keys ...string) {
+	if t.Failed() {
+		return
+	}
+	for _, k := range keys {
+		if _, ok := c.Val(k); ok {
+			log.Printf("Test %s failed, value of key '%s' should be zero\n", t.Name(), k)
+			t.FailNow()
+			break
+		}
 	}
 }
 

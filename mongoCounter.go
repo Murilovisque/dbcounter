@@ -19,72 +19,85 @@ const (
 
 type MongoCounter struct {
 	counter.Counter
-	Host                  string
-	DB                    string
-	Collection            string
-	PersistenceInterval   time.Duration
-	stopped               bool
-	mux                   sync.Mutex
-	backgroundPersistance chan bool
+	Host                              string
+	DB                                string
+	Collection                        string
+	PersistenceInterval               time.Duration
+	backgroundPersistanceRunning      bool
+	mux                               sync.Mutex
+	backgroundPersistanceStopNotifier chan bool
 }
 
 func (m *MongoCounter) StartBackgroundPersistance() {
-	if m.stopped {
-		log.Printf("MongoCounter - Starting persistance each %v\n", m.PersistenceInterval)
-		m.stopped = false
-		go func(backPersist chan bool, interval time.Duration) {
-			nextPersistance := time.Now().Add(interval)
+	if !m.backgroundPersistanceRunning {
+		log.Printf("MongoCounter - Starting background persistance each %v\n", m.PersistenceInterval)
+		m.backgroundPersistanceRunning = true
+		m.backgroundPersistanceStopNotifier = make(chan bool)
+		if m.PersistenceInterval == 0 {
+			log.Println("MongoCounter - PersistenceInterval should not be zero, use default value 10 seconds")
+			m.PersistenceInterval = 10 * time.Second
+		}
+		go func(mongo *MongoCounter) {
+			tick := time.Tick(mongo.PersistenceInterval)
 			for {
 				select {
-				case <-backPersist:
+				case <-mongo.backgroundPersistanceStopNotifier:
+					log.Println("MongoCounter - Background persistance stopped")
 					return
-				default:
-					if time.Now().After(nextPersistance) {
-						m.Persist()
-						nextPersistance = time.Now().Add(interval)
-					}
+				case <-tick:
+					mongo.Persist()
+					log.Println("MongoCounter - Background persistance executed")
 				}
 			}
-		}(m.backgroundPersistance, m.PersistenceInterval)
+		}(m)
+		log.Println("MongoCounter - Background persistance started")
 	}
 }
 
 func (m *MongoCounter) Stop() {
-	m.stopped = true
-	m.backgroundPersistance <- true
+	log.Println("MongoCounter - Stopping background persistance")
+	m.backgroundPersistanceRunning = false
+	m.backgroundPersistanceStopNotifier <- true
 	m.Persist()
 }
 
-func (m *MongoCounter) Clear(key string) {
+func (m *MongoCounter) Clear(key string) error {
 	session, err := mgo.Dial(m.Host)
 	if err != nil {
-		log.Println(err)
-		return
+		return err
 	}
 	defer session.Close()
 	session.SetMode(mgo.Monotonic, true)
-	removeCollectionVal(session, m.DB, m.Collection, key)
+	err = removeCollectionVal(session, m.DB, m.Collection, key)
+	if err != nil {
+		return err
+	}
 	m.Counter.Clear(key)
+	return nil
 }
 
-func (m *MongoCounter) Persist() {
+func (m *MongoCounter) Persist() error {
 	session, err := mgo.Dial(m.Host)
 	if err != nil {
-		log.Println(err)
-		return
+		return err
 	}
 	defer session.Close()
 	session.SetMode(mgo.Monotonic, true)
 	m.mux.Lock()
 	defer m.mux.Unlock()
 	m.Range(func(k, v interface{}) bool {
-		log.Printf("Persisting key: %s...\n", k)
-		err := persistCollectionVal(session, m.DB, m.Collection, k.(string), v)
+		log.Printf("MongoCounter - Persisting key: %s...\n", k)
+		err = persistCollectionVal(session, m.DB, m.Collection, k.(string), v)
 		if err != nil {
-			log.Println(err)
+			return false
 		}
+		log.Printf("MongoCounter - Key persisted: %s...\n", k)
 		return true
 	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *MongoCounter) UpdateFromDB() error {
