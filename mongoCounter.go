@@ -42,11 +42,14 @@ func (m *MongoCounter) StartBackgroundPersistance() {
 			for {
 				select {
 				case <-mongo.backgroundPersistanceStopNotifier:
-					log.Println("MongoCounter - Background persistance stopped")
 					return
 				case <-tick:
-					mongo.Persist()
-					log.Println("MongoCounter - Background persistance executed")
+					err := mongo.Persist()
+					if err == nil {
+						log.Println("MongoCounter - Background persistance executed")
+					} else {
+						log.Printf("MongoCounter - Error in background persistance: %v\n", err)
+					}
 				}
 			}
 		}(m)
@@ -59,6 +62,7 @@ func (m *MongoCounter) Stop() {
 	m.backgroundPersistanceRunning = false
 	m.backgroundPersistanceStopNotifier <- true
 	m.Persist()
+	log.Println("MongoCounter - Background persistance stopped")
 }
 
 func (m *MongoCounter) Clear(key string) error {
