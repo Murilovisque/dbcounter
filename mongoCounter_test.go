@@ -104,6 +104,29 @@ func TestStartBackgroundPersistanceShouldWorks(t *testing.T) {
 	passIfAreEqualsIntWhenUseVal(t, 5, &m, "k1i")
 }
 
+func TestIncAndPersistAndUpdateFromDBInOtherInstanceAndPersist(t *testing.T) {
+	dropDataBase(dbTest)
+	m := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest, PersistenceInterval: 1 * time.Second}
+	m.Inc("k1i", 5)
+	m.Inc("k1d", time.Duration(5))
+	err := m.Persist()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+	m2 := dbcounter.MongoCounter{Host: hostTest, DB: dbTest, Collection: collectionTest}
+	err = m2.UpdateFromDB()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+	err = m2.Persist()
+	if err != nil {
+		log.Println(err)
+		t.FailNow()
+	}
+}
+
 func passIfAreZero(t *testing.T, c *dbcounter.MongoCounter, keys ...string) {
 	if t.Failed() {
 		return

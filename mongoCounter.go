@@ -124,12 +124,18 @@ func (m *MongoCounter) UpdateFromDB() error {
 }
 
 func persistCollectionVal(session *mgo.Session, db, collectionName, key string, val interface{}) error {
-	collection := session.DB(db).C(collectionName)
-	var id bson.ObjectId
-	if err := collection.Find(bson.M{keyField: key}).Select(bson.M{"_id": 1}).One(&id); err == mgo.ErrNotFound {
-		return collection.Insert(&countMongo{Key: key, Val: val, ValType: fmt.Sprintf("%T", val)})
+	var result struct {
+		ID bson.ObjectId `bson:"_id,omitempty"`
 	}
-	return collection.Update(bson.M{"_id": id}, bson.M{"$set": bson.M{valField: val}})
+	collection := session.DB(db).C(collectionName)
+	if err := collection.Find(bson.M{keyField: key}).Select(bson.M{"_id": 1}).One(&result); err == nil {
+		return collection.Update(bson.M{"_id": result.ID}, bson.M{"$set": bson.M{valField: val}})
+	} else if err == mgo.ErrNotFound {
+		return collection.Insert(&countMongo{Key: key, Val: val, ValType: fmt.Sprintf("%T", val)})
+	} else {
+		return err
+	}
+
 }
 
 func removeCollectionVal(session *mgo.Session, db, collectionName, key string) error {
